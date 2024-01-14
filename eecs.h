@@ -273,7 +273,9 @@ eecs_realloc(void* memctx, void* ptr, size_t new_size) {
 #define eecs_array_pop(array) array[eecs_dynamic_array_pop(array)]
 
 #define eecs_array_resize(allocator, array, length) \
-	eecs_dynamic_array_resize(allocator, array, length, sizeof(*array))
+	do { \
+		array = eecs_dynamic_array_resize(allocator, array, length, sizeof(*array)); \
+	} while (0)
 
 #define eecs_array_clear(array) \
 	eecs_dynamic_array_clear(array)

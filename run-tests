@@ -1,0 +1,12 @@
+#!/bin/sh -ex
+
+cc \
+    -std=c11 -Wextra -Werror -pedantic \
+    -fsanitize=undefined,address \
+	-I. \
+	-g \
+    -o test \
+	munit/munit.c \
+    tests/*.c
+
+./test "$@"

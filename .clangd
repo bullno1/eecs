@@ -6,3 +6,8 @@ If:
   PathMatch: eecs\.h
 CompileFlags:
   Add: [-DEECS_IMPLEMENTATION]
+---
+If:
+  PathMatch: tests/.*\.c
+CompileFlags:
+  Add: [-I../]
