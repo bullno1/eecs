@@ -5,6 +5,7 @@
 struct SystemData {
 	int init_per_world_called;
 	int cleanup_per_world_called;
+	eecs_system_t handle;
 };
 
 static void
@@ -14,6 +15,8 @@ system_init_per_world(
 ) {
 	struct SystemData* system_data = userdata;
 	++system_data->init_per_world_called;
+
+	eecs_set_per_world_userdata(world, system_data->handle, userdata);
 }
 
 static void
@@ -45,16 +48,14 @@ init(const MunitParameter params[], void* fixture) {
 		.alignment = _Alignof(struct C),
 	});
 
-	eecs_system_t sys_with_init = EECS_HANDLE_INIT;
 	struct SystemData sys_with_init_data = { 0 };
-	eecs_register_system(ecs, &sys_with_init, (eecs_system_options_t){
+	eecs_register_system(ecs, &sys_with_init_data.handle, (eecs_system_options_t){
 		.init_per_world_fn = system_init_per_world,
 		.userdata = &sys_with_init_data,
 	});
 
-	eecs_system_t sys_with_cleanup = EECS_HANDLE_INIT;
 	struct SystemData sys_with_cleanup_data = { 0 };
-	eecs_register_system(ecs, &sys_with_cleanup, (eecs_system_options_t){
+	eecs_register_system(ecs, &sys_with_cleanup_data.handle, (eecs_system_options_t){
 		.cleanup_per_world_fn = system_cleanup_per_world,
 		.userdata = &sys_with_cleanup_data,
 	});

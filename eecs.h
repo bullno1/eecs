@@ -1597,7 +1597,7 @@ eecs_register_system(
 	void* memctx = ecs->options.memctx;
 	if (handle->from_1_index == 0) {
 		eecs_array_push(memctx, ecs->systems, options);
-		handle->from_1_index = eecs_array_length(ecs->components);
+		handle->from_1_index = eecs_array_length(ecs->systems);
 	} else {
 		ecs->systems[eecs_index_of(*handle)] = options;
 	}
