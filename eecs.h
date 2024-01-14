@@ -447,7 +447,7 @@ eecs_dynamic_array_pop(void* array) {
 #include <limits.h>
 
 typedef struct eecs_bitset_s {
-	eecs_id_t max_bits;
+	eecs_id_t num_masks;
 	eecs_mask_t masks[];
 } eecs_bitset_t;
 
@@ -463,38 +463,34 @@ eecs_bitset_init(eecs_bitset_t* bitset, eecs_id_t max_bits) {
 	size_t num_bits_per_mask = sizeof(eecs_mask_t) * CHAR_BIT;
 	size_t num_masks = ((size_t)max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
 	memset(bitset->masks, 0, sizeof(eecs_mask_t) * num_masks);
-	bitset->max_bits = max_bits;
+	bitset->num_masks = num_masks;
 }
 
 EECS_PRIVATE void
 eecs_bitset_set(eecs_bitset_t* bitset, eecs_id_t bit) {
-	EECS_ASSERT(bit < bitset->max_bits, "Out of bound");
-
 	eecs_mask_t num_bits_per_mask = (eecs_mask_t)(sizeof(eecs_mask_t) * CHAR_BIT);
-	eecs_mask_t mask_index = (eecs_mask_t)bit / num_bits_per_mask;
+	eecs_id_t mask_index = (eecs_id_t)((eecs_mask_t)bit / num_bits_per_mask);
 	eecs_mask_t bit_mask = 1 << ((eecs_mask_t)bit % num_bits_per_mask);
+	EECS_ASSERT(mask_index < bitset->num_masks, "Out of bound");
+
 	bitset->masks[mask_index] |= bit_mask;
 }
 
 EECS_PRIVATE bool
 eecs_bitset_is_set(eecs_bitset_t* bitset, eecs_id_t bit) {
-	EECS_ASSERT(bit < bitset->max_bits, "Out of bound");
-
 	eecs_mask_t num_bits_per_mask = (eecs_mask_t)(sizeof(eecs_mask_t) * CHAR_BIT);
-	eecs_mask_t mask_index = (eecs_mask_t)bit / num_bits_per_mask;
+	eecs_id_t mask_index = (eecs_id_t)((eecs_mask_t)bit / num_bits_per_mask);
 	eecs_mask_t bit_mask = 1 << ((eecs_mask_t)bit % num_bits_per_mask);
+	EECS_ASSERT(mask_index < bitset->num_masks, "Out of bound");
+
 	return (bitset->masks[mask_index] & bit_mask) > 0;
 }
 
 EECS_PRIVATE bool
 eecs_bitset_is_all_set(eecs_bitset_t* bitset, eecs_bitset_t* required_bits) {
-	size_t num_bits_per_mask = sizeof(eecs_mask_t) * CHAR_BIT;
-	size_t num_masks = ((size_t)bitset->max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
-	size_t num_required_masks = ((size_t)required_bits->max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
-
 	bool result = true;
-	for (size_t i = 0; i < num_required_masks; ++i) {
-		eecs_mask_t mask = i < num_masks ? bitset->masks[i] : 0;
+	for (eecs_id_t i = 0; i < required_bits->num_masks; ++i) {
+		eecs_mask_t mask = i < bitset->num_masks ? bitset->masks[i] : 0;
 		eecs_mask_t required_mask = required_bits->masks[i];
 		result &= (mask & required_mask) == required_mask;
 	}
@@ -522,6 +518,8 @@ typedef struct eecs_system_entity_callback_s {
 
 typedef struct eecs_table_s {
 	eecs_signature_t signature;
+	eecs_bitset_t* bitset;
+
 	eecs_id_t num_entities_per_chunk;
 	ptrdiff_t* component_storage_offsets;
 
@@ -539,6 +537,7 @@ typedef struct eecs_system_table_match_s {
 
 typedef struct eecs_system_data_s {
 	void* per_world_data;
+	eecs_bitset_t* bitset;
 	eecs_array(eecs_system_table_match_t) matched_tables;
 } eecs_system_data_t;
 
@@ -736,6 +735,10 @@ eecs_try_match_system_with_table(
 	const eecs_system_options_t* system_options = &world->ecs->systems[system_index];
 	eecs_system_data_t* system_data = &world->system_data[system_index];
 
+	if (!eecs_bitset_is_all_set(table->bitset, system_data->bitset)) {
+		return;
+	}
+
 	eecs_signature_t signature = table->signature;
 	eecs_id_t num_requirements = 0;
 	for (
@@ -744,20 +747,7 @@ eecs_try_match_system_with_table(
 		&& system_options->match_components[i].from_1_index != 0;
 		++i
 	) {
-		eecs_component_t requirement = system_options->match_components[i];
 		++num_requirements;
-
-		bool match_found = false;
-		for (eecs_id_t j = 0; j < signature.length; ++j) {
-			if (signature.components[j].from_1_index == requirement.from_1_index) {
-				match_found = true;
-				break;
-			}
-		}
-
-		if (!match_found) {
-			return;
-		}
 	}
 
 	void* memctx = world->options.memctx;
@@ -812,25 +802,45 @@ eecs_sync_world(eecs_world_t* world) {
 		eecs_id_t new_num_systems = eecs_array_length(ecs->systems);
 		eecs_array_resize(world->options.memctx, world->system_data, new_num_systems);
 
-		for (eecs_id_t i = old_num_systems; i < new_num_systems; ++i) {
-			const eecs_system_options_t* system_options = &ecs->systems[i];
-			if (system_options->init_per_world_fn) {
-				system_options->init_per_world_fn(world, system_options->userdata);
-			}
-		}
-
 		eecs_arena_reset(world, &world->version_arena);
 		eecs_array_indexed_foreach(eecs_table_t*, itr, world->tables) {
 			eecs_array_clear((*itr.value)->init_callbacks);
 			eecs_array_clear((*itr.value)->cleanup_callbacks);
 		}
 
+		eecs_id_t num_available_components = eecs_array_length(ecs->components);
 		for (eecs_id_t i = 0; i < new_num_systems; ++i) {
+			const eecs_system_options_t* system_options = &ecs->systems[i];
 			eecs_system_data_t* system_data = &world->system_data[i];
 			eecs_array_clear(system_data->matched_tables);
 
+			system_data->bitset = eecs_arena_alloc(
+				world, &world->version_arena,
+				eecs_bitset_memory_size(num_available_components),
+				_Alignof(eecs_bitset_t)
+			);
+
+			for (
+				eecs_id_t j = 0;
+				system_options->match_components != NULL
+				&& system_options->match_components[j].from_1_index != 0;
+				++j
+			) {
+				eecs_bitset_set(
+					system_data->bitset,
+					eecs_index_of(system_options->match_components[j])
+				);
+			}
+
 			eecs_array_indexed_foreach(eecs_table_t*, itr, world->tables) {
 				eecs_try_match_system_with_table(world, i, *itr.value);
+			}
+		}
+
+		for (eecs_id_t i = old_num_systems; i < new_num_systems; ++i) {
+			const eecs_system_options_t* system_options = &ecs->systems[i];
+			if (system_options->init_per_world_fn) {
+				system_options->init_per_world_fn(world, system_options->userdata);
 			}
 		}
 	}
@@ -855,16 +865,24 @@ eecs_get_table(eecs_world_t* world, eecs_signature_t signature) {
 	eecs_component_t* sig_content_copy = eecs_malloc(memctx, sig_size);
 	memcpy(sig_content_copy, signature.components, sig_size);
 
+	eecs_id_t num_available_components = eecs_array_length(world->ecs->components);
 	eecs_table_t* table = eecs_malloc(memctx, sizeof(eecs_table_t));
 	*table = (eecs_table_t){
 		.signature = {
 			.length = signature.length,
 			.components = sig_content_copy,
 		},
+		.bitset = eecs_malloc(
+			memctx, eecs_bitset_memory_size(num_available_components)
+		),
 		.component_storage_offsets = eecs_malloc(
 			memctx, sizeof(ptrdiff_t) * signature.length
 		),
 	};
+	eecs_bitset_init(table->bitset, num_available_components);
+	for (eecs_id_t i = 0; i < signature.length; ++i) {
+		eecs_bitset_set(table->bitset, eecs_index_of(signature.components[i]));
+	}
 	eecs_array_push(memctx, world->tables, table);  // NOLINT(bugprone-sizeof-expression)
 
 	// Calculate how many entities can fit in a chunk and storage offset
@@ -1368,6 +1386,7 @@ eecs_destroy_world(eecs_world_t* world) {
 			eecs_free(world->options.table_chunk_memctx, *chunk_itr.value);
 		}
 		eecs_array_free(memctx, table->chunks);
+		eecs_free(memctx, table->bitset);
 		eecs_free(memctx, table);
 	}
 	eecs_array_free(memctx, world->tables);
@@ -1645,65 +1664,6 @@ eecs_morph_entity(
 	const eecs_component_init_t* new_components,
 	const eecs_component_t* removed_components
 ) {
-	eecs_sync_world(world);
-
-	eecs_entity_data_t* entity_data = eecs_get_entity_data(world, handle);
-	if (entity_data == NULL) { return; }
-
-	if (entity_data->table == world->current_update_table) {
-		eecs_id_t num_new_components = 0;
-		for (
-			eecs_id_t i = 0;
-			new_components != NULL
-			&& new_components[i].component.from_1_index != 0;
-			++i
-		) {
-			++num_new_components;
-		}
-
-		eecs_id_t num_removed_components = 0;
-		for (
-			eecs_id_t i = 0;
-			removed_components != NULL
-			&& removed_components[i].from_1_index != 0;
-			++i
-		) {
-			++num_removed_components;
-		}
-
-		eecs_deferred_op_t* op = eecs_alloc_deferred_op(world, EECS_MORPH_ENTITY, handle);
-
-		if (num_new_components > 0) {
-			op->new_components = eecs_arena_alloc(
-				world,
-				&world->deferred_arena,
-				sizeof(eecs_component_init_t) * (num_new_components + 1),
-				_Alignof(eecs_component_init_t)
-			);
-			memcpy(
-				op->new_components,
-				new_components,
-				sizeof(eecs_component_init_t) * (num_new_components + 1)
-			);
-			// COPY init data
-		}
-
-		if (num_removed_components > 0) {
-			op->removed_components = eecs_arena_alloc(
-				world,
-				&world->deferred_arena,
-				sizeof(eecs_component_t) * (num_removed_components + 1),
-				_Alignof(eecs_component_t)
-			);
-			memcpy(
-				op->removed_components,
-				removed_components,
-				sizeof(eecs_component_init_t) * (num_removed_components + 1)
-			);
-		}
-	} else {
-		eecs_morph_entity_now(world, entity_data, new_components, removed_components);
-	}
 }
 
 #endif
