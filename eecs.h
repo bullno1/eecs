@@ -190,15 +190,6 @@ eecs_create_entity_from_template(
 EECS_API void
 eecs_destroy_entity(eecs_world_t* world, eecs_entity_t entity);
 
-EECS_API void
-eecs_activate_entity(eecs_world_t* world, eecs_entity_t entity);
-
-EECS_API void
-eecs_deactivate_entity(eecs_world_t* world, eecs_entity_t entity);
-
-EECS_API bool
-eecs_is_entity_active(eecs_world_t* world, eecs_entity_t entity);
-
 EECS_API bool
 eecs_is_valid_entity(eecs_world_t* world, eecs_entity_t entity);
 
