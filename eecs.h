@@ -292,9 +292,9 @@ eecs_realloc(void* memctx, void* ptr, size_t new_size) {
 
 #define eecs_array_indexed_foreach_rev(type, itr, array) \
 	for ( \
-		struct { eecs_id_t index; type* value; } itr = { eecs_array_length(array) - 1, &eecs_array_back(array) }; \
-		itr.index >= 0; \
-		--itr.index, itr.value = &(array)[itr.index] \
+		struct { eecs_id_t index; type* value; } itr = { eecs_array_length(array) - 1, 0 }; \
+		itr.index >= 0 && (itr.value = &(array)[itr.index]); \
+		--itr.index \
 	)
 
 #define eecs_insertion_sort(length, array, element_type, cmp_lt) \
