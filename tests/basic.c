@@ -8,6 +8,8 @@ struct SystemData {
 	int init_per_entity;
 	int cleanup_per_entity;
 	eecs_system_t handle;
+
+	eecs_entity_t seen_entities[10];
 };
 
 static void
@@ -37,9 +39,9 @@ system_init_per_entity(
 	void* userdata
 ) {
 	struct SystemData* system_data = userdata;
-	++system_data->init_per_entity;
 
 	munit_assert_true(eecs_is_valid_entity(world, entity));
+	system_data->seen_entities[system_data->init_per_entity++] = entity;
 }
 
 static void
@@ -100,6 +102,13 @@ init_cleanup(const MunitParameter params[], void* fixture) {
 	eecs_register_system(ecs, &late_reg.handle, (eecs_system_options_t){
 		.init_per_world_fn = system_init_per_world,
 		.cleanup_per_world_fn = system_cleanup_per_world,
+		.require_components = (eecs_component_t[]){
+			comp_A,
+			comp_C,
+			EECS_END_OF_LIST,
+		},
+		.init_per_entity_fn = system_init_per_entity,
+		.cleanup_per_entity_fn = system_cleanup_per_entity,
 		.userdata = &late_reg,
 	});
 
@@ -151,9 +160,17 @@ init_cleanup(const MunitParameter params[], void* fixture) {
 	munit_assert_int(sys_with_cleanup_data.cleanup_per_world_called, ==, 1);
 	munit_assert_int(sys_with_cleanup_data.init_per_entity, ==, 2);
 	munit_assert_int(sys_with_cleanup_data.cleanup_per_entity, ==, 2);
+	munit_assert_int(entity.from_1_index, ==, sys_with_cleanup_data.seen_entities[0].from_1_index);
+	munit_assert_int(entity.gen, ==, sys_with_cleanup_data.seen_entities[0].gen);
+	munit_assert_int(entity2.from_1_index, ==, sys_with_cleanup_data.seen_entities[1].from_1_index);
+	munit_assert_int(entity2.gen, ==, sys_with_cleanup_data.seen_entities[1].gen);
 
 	munit_assert_int(late_reg.init_per_world_called, ==, 1);
 	munit_assert_int(late_reg.cleanup_per_world_called, ==, 1);
+	munit_assert_int(late_reg.init_per_entity, ==, 1);
+	munit_assert_int(late_reg.cleanup_per_entity, ==, 1);
+	munit_assert_int(entity2.from_1_index, ==, late_reg.seen_entities[0].from_1_index);
+	munit_assert_int(entity2.gen, ==, late_reg.seen_entities[0].gen);
 
 	eecs_destroy(ecs);
 	return MUNIT_OK;
