@@ -1,0 +1,8 @@
+---
+CompileFlags:
+  Add: [-xc, -Wall, -Werror, -pedantic, -std=c11]
+---
+If:
+  PathMatch: eecs\.h
+CompileFlags:
+  Add: [-DEECS_IMPLEMENTATION]
