@@ -1052,13 +1052,13 @@ eecs_delete_entity_from_table(
 	const ptrdiff_t* component_storage_offsets = table->component_storage_offsets;
 	const size_t* component_sizes = table->component_sizes;
 	for (eecs_id_t i = 0; i < table->signature.length; ++i) {
-		eecs_component_t component = table->signature.components[i];
-		size_t component_size = component_sizes[eecs_index_of(component)];
+		size_t component_size = component_sizes[i];
+		ptrdiff_t component_storage_offset = component_storage_offsets[i];
 		char* component_data = chunk
-			+ component_storage_offsets[i]
+			+ component_storage_offset
 			+ pos_in_chunk * component_size;
 		char* last_component_data = last_chunk
-			+ component_storage_offsets[i]
+			+ component_storage_offset
 			+ last_pos_in_chunk * component_size;
 
 		memcpy(component_data, last_component_data, component_size);
