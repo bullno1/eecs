@@ -5,6 +5,8 @@
 struct SystemData {
 	int init_per_world_called;
 	int cleanup_per_world_called;
+	int init_per_entity;
+	int cleanup_per_entity;
 	eecs_system_t handle;
 };
 
@@ -28,8 +30,32 @@ system_cleanup_per_world(
 	++system_data->cleanup_per_world_called;
 }
 
+static void
+system_init_per_entity(
+	eecs_world_t* world,
+	eecs_entity_t entity,
+	void* userdata
+) {
+	struct SystemData* system_data = userdata;
+	++system_data->init_per_entity;
+
+	munit_assert_true(eecs_is_valid_entity(world, entity));
+}
+
+static void
+system_cleanup_per_entity(
+	eecs_world_t* world,
+	eecs_entity_t entity,
+	void* userdata
+) {
+	struct SystemData* system_data = userdata;
+	++system_data->cleanup_per_entity;
+
+	munit_assert_true(eecs_is_valid_entity(world, entity));
+}
+
 static MunitResult
-init(const MunitParameter params[], void* fixture) {
+init_cleanup(const MunitParameter params[], void* fixture) {
 	eecs_t* ecs = eecs_create((eecs_options_t) { 0 });
 
 	eecs_component_t comp_A = EECS_HANDLE_INIT;
@@ -56,7 +82,13 @@ init(const MunitParameter params[], void* fixture) {
 
 	struct SystemData sys_with_cleanup_data = { 0 };
 	eecs_register_system(ecs, &sys_with_cleanup_data.handle, (eecs_system_options_t){
+		.require_components = (eecs_component_t[]){
+			comp_A,
+			EECS_END_OF_LIST,
+		},
 		.cleanup_per_world_fn = system_cleanup_per_world,
+		.init_per_entity_fn = system_init_per_entity,
+		.cleanup_per_entity_fn = system_cleanup_per_entity,
 		.userdata = &sys_with_cleanup_data,
 	});
 
@@ -80,7 +112,26 @@ init(const MunitParameter params[], void* fixture) {
 		},
 		EECS_END_OF_LIST,
 	});
-	munit_assert_true(eecs_is_valid_entity(world, entity));
+
+	eecs_entity_t entity2 = eecs_create_entity(world, (eecs_component_init_t[]){
+		{
+			.component = comp_A,
+			.data = &(struct A){
+				.a = 3.14f,
+			},
+		},
+		{
+			.component = comp_B,
+			.data = &(struct B){
+				.b = 420
+			},
+		},
+		{
+			.component = comp_C,
+		},
+		EECS_END_OF_LIST,
+	});
+	munit_assert_true(eecs_is_valid_entity(world, entity2));
 
 	struct A* a = eecs_get_component_in_entity(world, entity, comp_A);
 	munit_assert_not_null(a);
@@ -98,6 +149,8 @@ init(const MunitParameter params[], void* fixture) {
 
 	munit_assert_int(sys_with_cleanup_data.init_per_world_called, ==, 0);
 	munit_assert_int(sys_with_cleanup_data.cleanup_per_world_called, ==, 1);
+	munit_assert_int(sys_with_cleanup_data.init_per_entity, ==, 2);
+	munit_assert_int(sys_with_cleanup_data.cleanup_per_entity, ==, 2);
 
 	munit_assert_int(late_reg.init_per_world_called, ==, 1);
 	munit_assert_int(late_reg.cleanup_per_world_called, ==, 1);
@@ -109,7 +162,7 @@ init(const MunitParameter params[], void* fixture) {
 MunitSuite basic = {
 	.prefix = "/basic",
 	.tests = (MunitTest[]){
-		{ .name = "/init", .test = init },
+		{ .name = "/init_cleanup", .test = init_cleanup },
 		{ 0 },
 	},
 };

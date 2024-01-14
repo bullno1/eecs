@@ -1632,6 +1632,50 @@ eecs_destroy_world(eecs_world_t* world) {
 	void* memctx = world->options.memctx;
 	const eecs_t* ecs = world->ecs;
 
+	// Destroy all entities
+	eecs_array_indexed_foreach(eecs_table_t*, table_itr, world->tables) {
+		eecs_table_t* table = *table_itr.value;
+		eecs_id_t last_chunk_index = eecs_array_length(table->chunks) - 1;
+		eecs_id_t num_entities_per_chunk = table->num_entities_per_chunk;
+		eecs_id_t num_entities_in_last_chunk = table->num_entities % num_entities_per_chunk;
+		const ptrdiff_t* component_storage_offsets = table->component_storage_offsets;
+		const size_t* component_sizes = table->component_sizes;
+
+		eecs_array_indexed_foreach(char*, chunk_itr, table->chunks) {
+			char* chunk = *chunk_itr.value;
+
+			eecs_id_t num_entities = chunk_itr.index == last_chunk_index
+				? num_entities_in_last_chunk
+				: num_entities_per_chunk;
+
+			eecs_id_t* entity_ids = (eecs_id_t*)chunk;
+			for (eecs_id_t i = 0; i < num_entities; ++i) {
+				eecs_id_t from_1_index = entity_ids[i];
+				eecs_entity_t handle = {
+					.from_1_index = from_1_index,
+					.gen = world->entities[from_1_index - 1].gen,
+				};
+
+				eecs_array_indexed_foreach_rev(
+					eecs_system_entity_callback_t, itr, table->system_cleanup_callbacks
+				) {
+					itr.value->fn(world, handle, itr.value->userdata);
+				}
+
+				eecs_array_indexed_foreach_rev(
+					eecs_component_entity_callback_t, itr, table->component_cleanup_callbacks
+				) {
+					char* component_data = chunk
+						+ component_storage_offsets[itr.value->signature_index]
+						+ i * component_sizes[itr.value->signature_index];
+
+					itr.value->fn(world, handle, component_data, itr.value->userdata);
+				}
+			}
+		}
+	}
+
+	// Call cleanup on systems
 	eecs_array_indexed_foreach_rev(eecs_system_data_t, itr, world->system_data) {
 		eecs_system_options_t* system = &ecs->systems[itr.index];
 		if (system->cleanup_per_world_fn) {
