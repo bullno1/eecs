@@ -103,7 +103,8 @@ typedef struct eecs_component_options_s {
 typedef struct eecs_system_options_s {
 	void* userdata;
 	eecs_mask_t update_mask;
-	eecs_component_t* match_components;
+	eecs_component_t* require_components;
+	eecs_component_t* exclude_components;
 	eecs_system_world_fn_t pre_update_fn;
 	eecs_system_world_fn_t post_update_fn;
 	eecs_system_update_fn_t update_fn;
@@ -490,6 +491,18 @@ eecs_bitset_is_all_set(const eecs_bitset_t* bitset, const eecs_bitset_t* require
 	return result;
 }
 
+EECS_PRIVATE bool
+eecs_bitset_is_any_set(const eecs_bitset_t* bitset, const eecs_bitset_t* required_bits) {
+	bool result = false;
+	for (eecs_id_t i = 0; i < required_bits->num_masks; ++i) {
+		eecs_mask_t mask = i < bitset->num_masks ? bitset->masks[i] : 0;
+		eecs_mask_t required_mask = required_bits->masks[i];
+		result |= (mask & required_mask) > 0;
+	}
+
+	return result;
+}
+
 // eecs implementation
 // Private
 
@@ -540,7 +553,8 @@ typedef struct eecs_system_table_match_s {
 
 typedef struct eecs_system_data_s {
 	void* per_world_data;
-	eecs_bitset_t* bitset;
+	eecs_bitset_t* require_bitset;
+	eecs_bitset_t* exclude_bitset;
 	eecs_array(eecs_system_table_match_t) matched_tables;
 } eecs_system_data_t;
 
@@ -743,6 +757,15 @@ eecs_component_init_list_length(const eecs_component_init_t* list) {
 	return i;
 }
 
+EECS_PRIVATE bool
+eecs_table_matches_system(
+	const eecs_table_t* table,
+	const eecs_system_data_t* system_data
+) {
+	return eecs_bitset_is_all_set(table->bitset, system_data->require_bitset)
+		&& !eecs_bitset_is_any_set(table->bitset, system_data->exclude_bitset);
+}
+
 EECS_PRIVATE void
 eecs_try_match_system_with_table(
 	eecs_world_t* world,
@@ -752,12 +775,12 @@ eecs_try_match_system_with_table(
 	const eecs_system_options_t* system_options = &world->ecs->systems[system_index];
 	eecs_system_data_t* system_data = &world->system_data[system_index];
 
-	if (!eecs_bitset_is_all_set(table->bitset, system_data->bitset)) {
+	if (!eecs_table_matches_system(table, system_data)) {
 		return;
 	}
 
 	eecs_signature_t signature = table->signature;
-	eecs_id_t num_requirements = eecs_component_list_length(system_options->match_components);
+	eecs_id_t num_requirements = eecs_component_list_length(system_options->require_components);
 
 	void* memctx = world->options.memctx;
 	if (system_options->init_per_entity_fn) {
@@ -790,7 +813,7 @@ eecs_try_match_system_with_table(
 		}
 
 		for (eecs_id_t i = 0; i < num_requirements; ++i) {
-			eecs_component_t requirement = system_options->match_components[i];
+			eecs_component_t requirement = system_options->require_components[i];
 
 			for (eecs_id_t j = 0; j < signature.length; ++j) {
 				if (signature.components[j].from_1_index == requirement.from_1_index) {
@@ -873,22 +896,39 @@ eecs_sync_world(eecs_world_t* world) {
 			eecs_system_data_t* system_data = &world->system_data[i];
 			eecs_array_clear(system_data->matched_tables);
 
-			system_data->bitset = eecs_arena_alloc(
+			system_data->require_bitset = eecs_arena_alloc(
 				world, &world->version_arena,
 				eecs_bitset_memory_size(num_available_components),
 				_Alignof(eecs_bitset_t)
 			);
-			eecs_bitset_init(system_data->bitset, num_available_components);
-
+			eecs_bitset_init(system_data->require_bitset, num_available_components);
 			for (
 				eecs_id_t j = 0;
-				system_options->match_components != NULL
-				&& system_options->match_components[j].from_1_index != 0;
+				system_options->require_components != NULL
+				&& system_options->require_components[j].from_1_index != 0;
 				++j
 			) {
 				eecs_bitset_set(
-					system_data->bitset,
-					eecs_index_of(system_options->match_components[j])
+					system_data->require_bitset,
+					eecs_index_of(system_options->require_components[j])
+				);
+			}
+
+			system_data->exclude_bitset = eecs_arena_alloc(
+				world, &world->version_arena,
+				eecs_bitset_memory_size(num_available_components),
+				_Alignof(eecs_bitset_t)
+			);
+			eecs_bitset_init(system_data->exclude_bitset, num_available_components);
+			for (
+				eecs_id_t j = 0;
+				system_options->exclude_components != NULL
+				&& system_options->exclude_components[j].from_1_index != 0;
+				++j
+			) {
+				eecs_bitset_set(
+					system_data->exclude_bitset,
+					eecs_index_of(system_options->exclude_components[j])
 				);
 			}
 
@@ -1380,7 +1420,7 @@ eecs_morph_entity_now(
 	) {
 		eecs_id_t system_index = itr.value->system_index;
 		const eecs_system_data_t* system_data = &world->system_data[system_index];
-		if (!eecs_bitset_is_all_set(new_table->bitset, system_data->bitset)) {
+		if (!eecs_table_matches_system(new_table, system_data)) {
 			itr.value->fn(world, handle, itr.value->userdata);
 		}
 	}
@@ -1432,7 +1472,7 @@ eecs_morph_entity_now(
 	) {
 		eecs_id_t system_index = itr.value->system_index;
 		const eecs_system_data_t* system_data = &world->system_data[system_index];
-		if (!eecs_bitset_is_all_set(table->bitset, system_data->bitset)) {
+		if (!eecs_table_matches_system(table, system_data)) {
 			itr.value->fn(world, handle, itr.value->userdata);
 		}
 	}
