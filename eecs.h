@@ -442,6 +442,66 @@ eecs_dynamic_array_pop(void* array) {
 	return --header->length;
 }
 
+// bitset
+
+#include <limits.h>
+
+typedef struct eecs_bitset_s {
+	eecs_id_t max_bits;
+	eecs_mask_t masks[];
+} eecs_bitset_t;
+
+EECS_PRIVATE size_t
+eecs_bitset_memory_size(eecs_id_t max_bits) {
+	size_t num_bits_per_mask = sizeof(eecs_mask_t) * CHAR_BIT;
+	size_t num_masks = ((size_t)max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
+	return sizeof(eecs_bitset_t) + sizeof(eecs_mask_t) * num_masks;
+}
+
+EECS_PRIVATE void
+eecs_bitset_init(eecs_bitset_t* bitset, eecs_id_t max_bits) {
+	size_t num_bits_per_mask = sizeof(eecs_mask_t) * CHAR_BIT;
+	size_t num_masks = ((size_t)max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
+	memset(bitset->masks, 0, sizeof(eecs_mask_t) * num_masks);
+	bitset->max_bits = max_bits;
+}
+
+EECS_PRIVATE void
+eecs_bitset_set(eecs_bitset_t* bitset, eecs_id_t bit) {
+	EECS_ASSERT(bit < bitset->max_bits, "Out of bound");
+
+	eecs_mask_t num_bits_per_mask = (eecs_mask_t)(sizeof(eecs_mask_t) * CHAR_BIT);
+	eecs_mask_t mask_index = (eecs_mask_t)bit / num_bits_per_mask;
+	eecs_mask_t bit_mask = 1 << ((eecs_mask_t)bit % num_bits_per_mask);
+	bitset->masks[mask_index] |= bit_mask;
+}
+
+EECS_PRIVATE bool
+eecs_bitset_is_set(eecs_bitset_t* bitset, eecs_id_t bit) {
+	EECS_ASSERT(bit < bitset->max_bits, "Out of bound");
+
+	eecs_mask_t num_bits_per_mask = (eecs_mask_t)(sizeof(eecs_mask_t) * CHAR_BIT);
+	eecs_mask_t mask_index = (eecs_mask_t)bit / num_bits_per_mask;
+	eecs_mask_t bit_mask = 1 << ((eecs_mask_t)bit % num_bits_per_mask);
+	return (bitset->masks[mask_index] & bit_mask) > 0;
+}
+
+EECS_PRIVATE bool
+eecs_bitset_is_all_set(eecs_bitset_t* bitset, eecs_bitset_t* required_bits) {
+	size_t num_bits_per_mask = sizeof(eecs_mask_t) * CHAR_BIT;
+	size_t num_masks = ((size_t)bitset->max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
+	size_t num_required_masks = ((size_t)required_bits->max_bits + num_bits_per_mask - 1) / num_bits_per_mask;
+
+	bool result = true;
+	for (size_t i = 0; i < num_required_masks; ++i) {
+		eecs_mask_t mask = i < num_masks ? bitset->masks[i] : 0;
+		eecs_mask_t required_mask = required_bits->masks[i];
+		result &= (mask & required_mask) == required_mask;
+	}
+
+	return result;
+}
+
 // eecs implementation
 // Private
 
@@ -1057,42 +1117,52 @@ eecs_parse_component_init(
 	eecs_component_init_t** init_copy_out,
 	eecs_table_t** table_out
 ) {
+	// This assumes that the caller took a checkpoint
+	eecs_id_t num_available_components = eecs_array_length(world->ecs->components);
+	eecs_bitset_t* bitset = eecs_arena_alloc(
+		world,
+		&world->tmp_arena,
+		eecs_bitset_memory_size(num_available_components),
+		_Alignof(eecs_bitset_t)
+	);
+	eecs_bitset_init(bitset, num_available_components);
+
 	eecs_id_t num_inits = 0;
 	for (eecs_id_t i = 0; init[i].component.from_1_index != 0; ++i) {
 		++num_inits;
 	}
-	// This assumes that the caller took a checkpoint
+
 	eecs_component_init_t* init_copy = eecs_arena_alloc(
 		world,
 		&world->tmp_arena,
 		sizeof(eecs_component_init_t) * num_inits,
 		_Alignof(eecs_component_init_t)
 	);
-	memcpy(init_copy, init, sizeof(eecs_component_init_t) * num_inits);
-	eecs_insertion_sort(num_inits, init_copy, eecs_component_init_t, eecs_component_init_cmp_lt);
 
 	// Dedupe
-	eecs_id_t j = 0;
-	for (eecs_id_t i = 1; i < num_inits; ++i) {
-		if (init_copy[j].component.from_1_index != init_copy[i].component.from_1_index) {
-			++j;
-			init_copy[j] = init_copy[i];
-		}
+	eecs_id_t num_new_components = 0;
+	for (eecs_id_t i = 0; i < num_inits; ++i) {
+		eecs_id_t bit_index = eecs_index_of(init[i].component);
+		if (eecs_bitset_is_set(bitset, bit_index)) { continue; }
+
+		eecs_bitset_set(bitset, bit_index);
+		init_copy[num_new_components++] = init[i];
 	}
-	num_inits = j;
+
+	eecs_insertion_sort(num_new_components, init_copy, eecs_component_init_t, eecs_component_init_cmp_lt);
 
 	eecs_component_t* components = eecs_arena_alloc(
 		world,
 		&world->tmp_arena,
-		sizeof(eecs_component_t) * num_inits,
+		sizeof(eecs_component_t) * num_new_components,
 		_Alignof(eecs_component_t)
 	);
-	for (eecs_id_t i = 0; i < num_inits; ++i) {
+	for (eecs_id_t i = 0; i < num_new_components; ++i) {
 		components[i] = init_copy[i].component;
 	}
 
 	eecs_signature_t signature = {
-		.length = num_inits,
+		.length = num_new_components,
 		.components = components,
 	};
 	*table_out = eecs_get_table(world, signature);
