@@ -1606,6 +1606,9 @@ eecs_register_system(
 eecs_world_t*
 eecs_create_world(eecs_t* ecs, eecs_world_options_t options) {
 	options.memctx = options.memctx != NULL ? options.memctx : ecs->options.memctx;
+	options.table_chunk_memctx = options.table_chunk_memctx != NULL
+		? options.table_chunk_memctx
+		: options.memctx;
 	options.table_chunk_size = options.table_chunk_size > 0
 		? options.table_chunk_size
 		: EECS_DEFAULT_TABLE_CHUNK_SIZE;
